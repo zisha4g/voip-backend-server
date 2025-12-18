@@ -290,6 +290,89 @@ router.get('/me', async (req, res, next) => {
 });
 
 /**
+ * Change password
+ * POST /api/auth/change-password
+ * Headers: Authorization: Bearer <token>
+ * Body: { old_password, new_password }
+ */
+router.post('/change-password', async (req, res, next) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'No token provided'
+            });
+        }
+
+        const decoded = jwt.verify(token, JWT_SECRET);
+
+        const { old_password, new_password } = req.body;
+
+        if (!old_password || !new_password) {
+            return res.status(400).json({
+                success: false,
+                error: 'Old password and new password are required'
+            });
+        }
+
+        if (new_password.length < 6) {
+            return res.status(400).json({
+                success: false,
+                error: 'New password must be at least 6 characters'
+            });
+        }
+
+        logger.info('Change password attempt', { userId: decoded.id });
+
+        // Get user from database
+        const user = db.findUserById(decoded.id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        // Verify old password
+        const validPassword = await bcrypt.compare(old_password, user.password);
+
+        if (!validPassword) {
+            logger.warning('Change password failed - invalid old password', { userId: decoded.id });
+            return res.status(401).json({
+                success: false,
+                error: 'Current password is incorrect'
+            });
+        }
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(new_password, SALT_ROUNDS);
+
+        // Update password in database
+        db.updateUser(user.id, { password: hashedPassword });
+
+        logger.info('Password changed successfully', { userId: decoded.id });
+
+        return res.json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+
+    } catch (error) {
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid token'
+            });
+        }
+        logger.error('Change password error', { error: error.message });
+        next(error);
+    }
+});
+
+/**
  * Logout (client-side should delete token)
  * POST /api/auth/logout
  */
