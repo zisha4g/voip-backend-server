@@ -9,24 +9,51 @@ class VoipmsClient {
         this.timeout = parseInt(process.env.API_TIMEOUT) || 30000;
     }
 
-    async call(method, params = {}) {
+    buildPayload(method, params = {}) {
+        const payload = {
+            api_username: this.username,
+            api_password: this.password,
+            method
+        };
+
+        Object.keys(params).forEach(key => {
+            if (params[key] !== undefined && params[key] !== null) {
+                payload[key] = params[key];
+            }
+        });
+
+        return payload;
+    }
+
+    toQueryString(payload) {
+        const searchParams = new URLSearchParams();
+        Object.keys(payload).forEach(key => {
+            searchParams.append(key, String(payload[key]));
+        });
+        return searchParams.toString();
+    }
+
+    async call(method, params = {}, options = {}) {
         logger.apiRequest(method, params);
 
         try {
-            const url = new URL(this.apiUrl);
-            url.searchParams.append('api_username', this.username);
-            url.searchParams.append('api_password', this.password);
-            url.searchParams.append('method', method);
+            const payload = this.buildPayload(method, params);
 
-            Object.keys(params).forEach(key => {
-                if (params[key] !== undefined && params[key] !== null) {
-                    url.searchParams.append(key, params[key]);
-                }
-            });
+            const queryString = this.toQueryString(payload);
+            const url = `${this.apiUrl}?${queryString}`;
 
-            const response = await axios.get(url.toString(), {
-                timeout: this.timeout
-            });
+            // Default to GET for small requests; switch to POST if it would create an overly long URL.
+            // (Most servers/proxies reject very long URLs; VoIP.ms returns 414 in that case.)
+            const preferPost =
+                options.httpMethod === 'POST' ||
+                url.length > (parseInt(process.env.VOIPMS_MAX_URL_LENGTH) || 1800);
+
+            const response = preferPost
+                ? await axios.post(this.apiUrl, queryString, {
+                    timeout: this.timeout,
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                })
+                : await axios.get(url, { timeout: this.timeout });
 
             const data = response.data;
 
@@ -39,8 +66,15 @@ class VoipmsClient {
             return data;
 
         } catch (error) {
+            // If GET produced a 414 (URI Too Long), retry once with POST.
+            if (error?.response?.status === 414 && options.httpMethod !== 'POST') {
+                return this.call(method, params, { ...options, httpMethod: 'POST' });
+            }
+
             logger.error(`VoIP.ms API Error: ${method}`, {
                 message: error.message,
+                status: error?.response?.status,
+                response: error?.response?.data,
                 params
             });
             throw error;
@@ -129,9 +163,8 @@ class VoipmsClient {
     async getMMS(params = {}) { return this.call('getMMS', params); }
     async getMediaMMS(params = {}) { return this.call('getMediaMMS', params); }
     async sendSMS(params = {}) { return this.call('sendSMS', params); }
-    async sendMMS(params = {}) { return this.call('sendMMS', params); }
+    async sendMMS(params = {}) { return this.call('sendMMS', params, { httpMethod: 'POST' }); }
     async deleteSMS(params = {}) { return this.call('deleteSMS', params); }
-    async deleteMMS(params = {}) { return this.call('deleteMMS', params); }
     async setSMS(params = {}) { return this.call('setSMS', params); }
 
     // CDR

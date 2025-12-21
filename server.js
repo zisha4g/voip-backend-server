@@ -17,14 +17,17 @@ const recordingsRouter = require('./api/recordings');
 const billingRouter = require('./api/billing');
 const forwardingRouter = require('./api/forwarding');
 const conferenceRouter = require('./api/conference');
+const uploadsRouter = require('./api/uploads');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
 
 // Middleware
 app.use(corsMiddleware);
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// MMS payloads can be large (base64/media). Increase limits from Express defaults.
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '15mb' }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -58,6 +61,17 @@ app.use('/api/recordings', recordingsRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/forwarding', forwardingRouter);
 app.use('/api/conference', conferenceRouter);
+app.use('/api/uploads', uploadsRouter);
+
+// Serve uploaded media. VoIP.ms must be able to fetch media1 URLs.
+// If you want this to work in production, ensure PUBLIC_BASE_URL points at a public domain.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    fallthrough: false,
+    setHeaders: (res) => {
+        // Avoid caching sensitive media on shared machines/proxies.
+        res.setHeader('Cache-Control', 'no-store');
+    }
+}));
 
 // Error handling
 app.use((err, req, res, next) => {
